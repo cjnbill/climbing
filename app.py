@@ -88,4 +88,98 @@ def process_video(input_path, output_path, skip_count):
             # 1. Hip Trajectory
             if show_trail:
                 l_hip = get_coords(23)
-                current
+                current_hip = (int(l_hip[0]), int(l_hip[1]))
+                hip_trail.append(current_hip)
+                if len(hip_trail) > 100: hip_trail.pop(0)
+                for i in range(1, len(hip_trail)):
+                    cv2.line(image, hip_trail[i-1], hip_trail[i], (0, 255, 255), 2)
+                cv2.circle(image, current_hip, 6, (0, 0, 255), -1)
+
+            # 2. Flagging Detection
+            l_hip, l_knee, l_ankle = get_coords(23), get_coords(25), get_coords(27)
+            r_hip, r_knee, r_ankle = get_coords(24), get_coords(26), get_coords(28)
+            
+            def check_leg(h, k, a):
+                h_np, k_np, a_np = np.array(h), np.array(k), np.array(a)
+                rad = np.arctan2(a_np[1]-k_np[1], a_np[0]-k_np[0]) - np.arctan2(h_np[1]-k_np[1], h_np[0]-k_np[0])
+                ang = np.abs(rad*180.0/np.pi)
+                if ang > 180.0: ang = 360-ang
+                if ang > flag_threshold and abs(a[0]-h[0]) > width * 0.15: return True, int(ang)
+                return False, 0
+
+            fl, al = check_leg(l_hip, l_knee, l_ankle)
+            fr, ar = check_leg(r_hip, r_knee, r_ankle)
+            if fl or fr:
+                disp = al if fl else ar
+                cv2.putText(image, f"NICE FLAG! ({disp})", (50, 100), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+
+            # 3. Skeleton
+            if show_skeleton:
+                mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
+
+        out.write(image)
+        frame_count += 1
+        
+        # Update UI every 15 frames to keep CPU focused on processing
+        if frame_count % 15 == 0:
+            progress_percent = min(frame_count/total_frames, 1.0)
+            progress_bar.progress(progress_percent)
+            status_text.text(f"Processing Frame {frame_count}/{total_frames}...")
+
+    cap.release()
+    out.release()
+    progress_bar.empty()
+    status_text.empty()
+    return output_path
+
+# ================= UI Layout with Memory (Session State) =================
+col1, col2 = st.columns([1, 1])
+
+with col1:
+    st.subheader("1. Video Source")
+    
+    # Option to reset and start over
+    if 'processed_video' in st.session_state:
+        if st.button("🔄 Analyze New Video"):
+            for key in ['processed_video', 'original_video']:
+                if key in st.session_state: del st.session_state[key]
+            st.rerun()
+
+    uploaded_file = st.file_uploader("Upload MOV or MP4 (Max 20s recommended)", type=['mov', 'mp4'])
+
+if uploaded_file:
+    # Persistent storage of original file to prevent re-uploading on UI change
+    if 'original_video' not in st.session_state:
+        suffix = os.path.splitext(uploaded_file.name)[1]
+        tfile = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        tfile.write(uploaded_file.read())
+        st.session_state['original_video'] = tfile.name
+    
+    with col1:
+        st.video(st.session_state['original_video'])
+        
+        # Only show the button if we haven't processed yet
+        if 'processed_video' not in st.session_state:
+            if st.button("Start Turbo Analysis 🚀", type="primary"):
+                out_path = tempfile.NamedTemporaryFile(delete=False, suffix='.webm').name
+                with col2:
+                    st.subheader("2. AI Analysis")
+                    with st.spinner('Analyzing... Speed depends on your settings.'):
+                        res = process_video(st.session_state['original_video'], out_path, frame_skip)
+                    
+                    if res and os.path.exists(res) and os.path.getsize(res) > 0:
+                        st.session_state['processed_video'] = res
+                        st.rerun()
+                    else:
+                        st.error("Processing failed. Try a smaller video.")
+
+# Right side persistent result display
+if 'processed_video' in st.session_state:
+    with col2:
+        st.subheader("2. AI Analysis")
+        st.success("Analysis Ready!")
+        res_path = st.session_state['processed_video']
+        with open(res_path, 'rb') as f:
+            st.video(f.read(), format="video/webm")
+        st.download_button("📥 Download WebM Result", open(res_path, 'rb'), "climb_analysis.webm")
