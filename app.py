@@ -46,9 +46,20 @@ def calculate_angle(a, b, c):
     return 360 - ang if ang > 180 else ang
 
 def process_video(input_path, output_path, skip_count):
-    # Use complexity 0 for Cloud CPU efficiency
-    pose = mp_pose.Pose(model_complexity=0, min_detection_confidence=0.5, min_tracking_confidence=0.5)
+    # --- 修复 PermissionError ---
+    # 我们手动指定一个可写的临时目录给 MediaPipe 使用，或者绕过自动下载
+    import os
+    os.environ['MEDIAPIPE_MODEL_PATH'] = tempfile.gettempdir() 
     
+    # 初始化 Pose
+    pose = mp_pose.Pose(
+        model_complexity=0, 
+        min_detection_confidence=0.5, 
+        min_tracking_confidence=0.5,
+        static_image_mode=False # 确保不触发复杂的重新下载逻辑
+    )
+    # -----------------------------
+
     cap = cv2.VideoCapture(input_path)
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
