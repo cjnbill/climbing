@@ -104,4 +104,44 @@ def process_video(input_path, output_path):
         frame_count += 1
         if frame_count % 10 == 0: # Update UI every 10 frames to save speed
             progress_bar.progress(min(frame_count/total_frames, 1.0))
-            status_text.text(f"Processing frame {frame_count}/{
+            status_text.text(f"Processing frame {frame_count}/{total_frames}")
+
+    cap.release()
+    out.release()
+    progress_bar.empty()
+    status_text.empty()
+    return output_path
+
+# ================= UI Layout =================
+col1, col2 = st.columns([1, 1])
+
+with col1:
+    st.subheader("1. Upload")
+    uploaded_file = st.file_uploader("Upload MOV/MP4", type=['mov', 'mp4'])
+
+if uploaded_file:
+    # Save original
+    suffix = os.path.splitext(uploaded_file.name)[1]
+    tfile = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    tfile.write(uploaded_file.read())
+    
+    with col1:
+        st.video(tfile.name)
+        if st.button("Start AI Analysis 🚀", type="primary"):
+            # Use .webm suffix for output
+            out_path = tempfile.NamedTemporaryFile(delete=False, suffix='.webm').name
+            
+            with col2:
+                st.subheader("2. AI Result")
+                with st.spinner('Analyzing...'):
+                    res = process_video(tfile.name, out_path)
+                
+                if res and os.path.exists(res) and os.path.getsize(res) > 0:
+                    st.success("Analysis Finished!")
+                    # Use binary read for stable web display
+                    with open(res, 'rb') as f:
+                        st.video(f.read(), format="video/webm")
+                    st.download_button("📥 Download WebM", open(res, 'rb'), "analysis.webm")
+                else:
+                    st.error("Output file is still empty. Trying alternate method...")
+                    st.info("Debugging: File Path exists: " + str(os.path.exists(out_path)))
