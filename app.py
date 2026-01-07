@@ -5,14 +5,18 @@ import numpy as np
 import tempfile
 import os
 
-# ================= 标准导入 (Standard Import) =================
-# 只要 requirements.txt 里锁定了 protobuf==3.20.3，这里就不会报错
-mp_pose = mp.solutions.pose
-mp_drawing = mp.solutions.drawing_utils
+# ================= 🛠️ 核心修复：直连导入 (Direct Import) =================
+# 云端环境经常找不到 mp.solutions，我们直接导入子模块，不走快捷方式。
+import mediapipe.solutions.pose as mp_pose
+import mediapipe.solutions.drawing_utils as mp_drawing
+
+# 打印一下确认导入成功 (会在后台日志显示)
+print("✅ Successfully loaded mp_pose and mp_drawing directly.")
+# ======================================================================
 
 # ================= Page Config =================
 st.set_page_config(page_title="Climbing AI Coach", page_icon="🧗", layout="wide")
-st.title("🧗 AI Climbing Coach (Python 3.11)")
+st.title("🧗 AI Climbing Coach (Direct Import Mode)")
 st.markdown("---")
 
 # ================= Sidebar =================
@@ -25,7 +29,9 @@ with st.sidebar:
 
 # ================= Process Logic =================
 def process_video(input_path, output_path):
+    # ⚠️ 注意：这里使用的是直接导入的 mp_pose，而不是 mp.solutions.pose
     pose = mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+    
     cap = cv2.VideoCapture(input_path)
     
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -87,6 +93,7 @@ def process_video(input_path, output_path):
 
             # Skeleton
             if show_skeleton:
+                # ⚠️ 这里的 drawing 调用方式也变了
                 mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
 
         out.write(image)
@@ -111,5 +118,5 @@ if uploaded_file:
         with col2:
             with st.spinner('Processing...'):
                 res = process_video(tfile.name, out_path)
-            st.success("Analysis Complete!")
+            st.success("Done!")
             st.video(res)
