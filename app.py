@@ -143,4 +143,26 @@ with col1:
 
 if uploaded_file:
     if 'original_video' not in st.session_state:
-        t = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(
+        t = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1])
+        t.write(uploaded_file.read())
+        st.session_state['original_video'] = t.name
+    
+    with col1:
+        st.video(st.session_state['original_video'])
+        if 'processed_video' not in st.session_state:
+            if st.button("Start Analysis 🚀", type="primary"):
+                out_name = tempfile.NamedTemporaryFile(delete=False, suffix='.webm').name
+                with col2:
+                    with st.spinner('AI analyzing... Speed depends on Skip Setting.'):
+                        res = process_video(st.session_state['original_video'], out_name, frame_skip)
+                    if res and os.path.getsize(res) > 0:
+                        st.session_state['processed_video'] = res
+                        st.rerun()
+
+if 'processed_video' in st.session_state:
+    with col2:
+        st.subheader("2. AI Analysis Result")
+        res_file = st.session_state['processed_video']
+        with open(res_file, 'rb') as f:
+            st.video(f.read(), format="video/webm")
+        st.download_button("📥 Download Analysis", open(res_file, 'rb'), "analysis.webm")
