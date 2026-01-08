@@ -4,53 +4,53 @@ import mediapipe as mp
 import numpy as np
 import tempfile
 import os
-import time
 
 # ================= 🛠️ 稳定导入 =================
 mp_pose = mp.solutions.pose
 mp_drawing = mp.solutions.drawing_utils
 
 # ================= 页面配置 =================
-st.set_page_config(page_title="Climbing AI Coach", page_icon="🧗", layout="wide")
-st.title("🧗 AI Climbing Coach (Action Tagging)")
+st.set_page_config(page_title="Climbing AI Coach Pro", page_icon="🧗", layout="wide")
+st.title("🧗 AI Climbing Coach (Stability & Force Analysis)")
 
 # ================= 侧边栏设置 =================
 with st.sidebar:
     st.header("🔧 Settings")
-    processing_speed = st.select_slider(
-        "Processing Speed", options=["Standard", "Fast", "Turbo"], value="Fast"
-    )
+    processing_speed = st.select_slider("Speed", options=["Standard", "Fast", "Turbo"], value="Fast")
     speed_map = {"Standard": 0, "Fast": 2, "Turbo": 4}
     frame_skip = speed_map[processing_speed]
     
     st.divider()
-    st.header("📊 Analysis Features")
-    show_skeleton = st.checkbox("Show Skeleton", value=True)
-    show_metrics = st.checkbox("Tag Key Moves (Speed/Stops)", value=True)
+    st.header("⚖️ Balance Analysis")
+    show_balance = st.checkbox("Identify Redundant Limbs", value=True)
     flag_threshold = st.slider("Flagging Threshold", 130, 170, 150)
 
-# ================= 核心算法 =================
+# ================= 几何计算辅助 =================
+def point_in_triangle(p, a, b, c):
+    """判定点 P 是否在三角形 ABC 内"""
+    def sign(p1, p2, p3):
+        return (p1[0] - p3[0]) * (p2[1] - p3[1]) - (p2[0] - p3[0]) * (p1[1] - p3[1])
+    
+    d1 = sign(p, a, b)
+    d2 = sign(p, b, c)
+    d3 = sign(p, c, a)
+    has_neg = (d1 < 0) or (d2 < 0) or (d3 < 0)
+    has_pos = (d1 > 0) or (d2 > 0) or (d3 > 0)
+    return not (has_neg and has_pos)
+
+# ================= 核心分析逻辑 =================
 def process_video(input_path, output_path, skip_count):
     pose = mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5)
     cap = cv2.VideoCapture(input_path)
     
-    orig_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    orig_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    orig_w, orig_h = int(cap.get(3)), int(cap.get(4))
     fps = int(cap.get(cv2.CAP_PROP_FPS)) or 30
-    
-    # 统一缩放到 720p 以保证处理速度
     target_h = 720
     scale = target_h / orig_h
     width, height = int(orig_w * scale), target_h
 
     fourcc = cv2.VideoWriter_fourcc(*'VP80') 
     out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-    
-    # 用于记录关键动作的变量
-    hip_history = []  # 记录最近几帧的髋部位置计算速度
-    stops = []        # 记录停顿点 [(x, y, duration), ...]
-    last_pos = None
-    stop_start_time = None
     
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     progress_bar = st.progress(0)
@@ -59,10 +59,8 @@ def process_video(input_path, output_path, skip_count):
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret: break
-        
         frame = cv2.resize(frame, (width, height))
         
-        # 跳帧逻辑
         if frame_count % (skip_count + 1) != 0:
             out.write(frame)
             frame_count += 1
@@ -76,54 +74,47 @@ def process_video(input_path, output_path, skip_count):
             lm = results.pose_landmarks.landmark
             def get_pt(idx): return np.array([lm[idx].x * width, lm[idx].y * height])
             
-            # 1. 获取重心（左右髋部中点）
-            l_hip, r_hip = get_pt(23), get_pt(24)
-            curr_hip = (l_hip + r_hip) / 2
-            
-            if show_metrics:
-                # --- 关键动作识别：速度与爆发 ---
-                if last_pos is not None:
-                    dist = np.linalg.norm(curr_hip - last_pos)
-                    # 如果向上位移瞬间超过阈值，判定为发力动作
-                    if (last_pos[1] - curr_hip[1]) > (height * 0.02): 
-                        cv2.putText(image, "POWER MOVE!", (int(curr_hip[0])+20, int(curr_hip[1])), 
-                                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 165, 255), 3)
-                    
-                    # --- 停顿点检测 ---
-                    if dist < (width * 0.005): # 几乎没动
-                        if stop_start_time is None: stop_start_time = frame_count
-                        duration = (frame_count - stop_start_time) / fps
-                        if duration > 1.0: # 停顿超过1秒
-                            cv2.circle(image, (int(curr_hip[0]), int(curr_hip[1])), 30, (255, 0, 0), 2)
-                            cv2.putText(image, f"REST: {duration:.1f}s", (int(curr_hip[0])-40, int(curr_hip[1])-40), 
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
-                    else:
-                        stop_start_time = None
-                
-                last_pos = curr_hip
+            # 获取 4 个末端点
+            limbs = {
+                "L-Hand": get_pt(15), "R-Hand": get_pt(16),
+                "L-Foot": get_pt(27), "R-Foot": get_pt(28)
+            }
+            # 获取重心 (Hip Center)
+            hip_c = (get_pt(23) + get_pt(24)) / 2
 
-            # 2. 绘制骨架
-            if show_skeleton:
-                mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
+            # --- 受力/平衡分析 ---
+            if show_balance:
+                names = list(limbs.keys())
+                redundant_limb = None
+                
+                # 尝试去掉每一个肢体，检查重心是否仍在剩余三个构成的三角形内
+                for i in range(4):
+                    others = [limbs[names[j]] for j in range(4) if i != j]
+                    if point_in_triangle(hip_c, others[0], others[1], others[2]):
+                        redundant_limb = names[i]
+                        break # 找到第一个冗余点就跳出
+                
+                # 视觉标记
+                for name, pt in limbs.items():
+                    color = (0, 0, 255) if name == redundant_limb else (0, 255, 0)
+                    size = 5 if name == redundant_limb else 10
+                    cv2.circle(image, (int(pt[0]), int(pt[1])), size, color, -1)
+                    if name == redundant_limb:
+                        cv2.putText(image, "REDUNDANT", (int(pt[0]), int(pt[1])-20), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+
+            # 绘制重心投影
+            cv2.circle(image, (int(hip_c[0]), int(hip_c[1])), 8, (255, 255, 255), 2)
             
-            # 3. 辅助 Flagging 判定
-            l_h, l_k, l_a = get_pt(23), get_pt(25), get_pt(27)
-            r_h, r_k, r_a = get_pt(24), get_pt(26), get_pt(28)
-            def check_ang(a, b, c):
-                rad = np.arctan2(c[1]-b[1], c[0]-b[0]) - np.arctan2(a[1]-b[1], a[0]-b[0])
-                ang = np.abs(rad*180.0/np.pi)
-                return 360-ang if ang > 180 else ang
-            
-            if check_ang(l_h, l_k, l_a) > flag_threshold or check_ang(r_h, r_k, r_a) > flag_threshold:
-                cv2.putText(image, "NICE FLAG!", (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+            # 绘制骨架
+            mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
 
         out.write(image)
         frame_count += 1
-        if frame_count % 10 == 0: progress_bar.progress(min(frame_count/total_frames, 1.0))
+        if frame_count % 15 == 0: progress_bar.progress(min(frame_count/total_frames, 1.0))
 
     cap.release()
     out.release()
-    progress_bar.empty()
     return output_path
 
 # ================= UI 布局 =================
@@ -145,10 +136,10 @@ if uploaded_file:
     with col1:
         st.video(st.session_state['original_video'])
         if 'processed_video' not in st.session_state:
-            if st.button("Analyze Key Moves 🚀", type="primary"):
+            if st.button("Run Balance Analysis ⚖️", type="primary"):
                 out_name = tempfile.NamedTemporaryFile(delete=False, suffix='.webm').name
                 with col2:
-                    with st.spinner('Detecting power moves and rests...'):
+                    with st.spinner('Calculating Support Polygon...'):
                         res = process_video(st.session_state['original_video'], out_name, frame_skip)
                     if res and os.path.getsize(res) > 0:
                         st.session_state['processed_video'] = res
@@ -156,7 +147,7 @@ if uploaded_file:
 
 if 'processed_video' in st.session_state:
     with col2:
-        st.subheader("2. AI Analysis")
+        st.subheader("2. Stability Insights")
         res_file = st.session_state['processed_video']
         with open(res_file, 'rb') as f: st.video(f.read(), format="video/webm")
-        st.download_button("📥 Download Analysis", open(res_file, 'rb'), "climb_analysis.webm")
+        st.info("🔴 Red circles mark 'Redundant' limbs. Your COG is stable without them.")
